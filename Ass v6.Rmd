@@ -1,0 +1,1582 @@
+---
+title: "Assignment"
+author: "Hazirah Muhammad"
+date: "6/23/2021"
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(readxl)
+library(knitr)
+library(dplyr)
+library(stringr)
+library(rbenchmark)
+library (udpipe)
+library(XML)
+library(lubridate)
+library(readr)
+library(data.table)
+library(textclean)
+# Download Forms 10-K from SEC
+library(edgar)
+# For sentiment datasets
+library(parallel)
+library(sentimentr)
+library(quanteda)
+library(tidytext)
+library(textstem)
+library(rvest)
+library(ggplot2)
+library(tidyr)
+library(reshape2)
+
+# part B
+library(tidyquant)
+library(tm)
+library(SentimentAnalysis)
+library(BatchGetSymbols)
+library(koRpus)
+library(quantmod)
+# part C
+library(koRpus)
+library(stm)
+library(wordcloud)
+```
+
+# 1. Part A: Construction of Corpus – Fetching 10-K forms from EDGAR
+
+## 1.1 Selection of 30 companies
+
+We have chosen to select 30 companies focusing on only certain sub industry to provide better comparison of data across sectors. Out of the 13 categories of sub industry, we have focused on reviewing only six. Our selection was based on the followings.
+
+1) Sub industry with the highest number of companies - it would be more meaningful to analyse data of companies in the same industry.
+
+2) Market capitalisation - to analyse whether stock price in bigger companies with higher market capitalisation is affected by the SEC filings
+
+```{r}
+# Read list of 30 companies excel file
+company <- read_xlsx("company_new.xlsx")
+
+# Rename Columns
+colnames(company) <- c("Symbol", "Security", "GICS_Sector", "GICS_Sub_Industry", "CIK", "Market_Cap")
+
+# Format column types
+company$Symbol <- as.character(company$Symbol)
+company$Security <- as.character(company$Security)
+company$GICS_Sector <- as.character(company$GICS_Sector)
+company$GICS_Sub_Industry <- as.character(company$GICS_Sub_Industry)
+company$CIK <- as.integer(company$CIK)
+company$Market_Cap <- as.integer(company$Market_Cap)
+
+company
+```
+
+## 1.2 Inspect the master index
+
+```{r, eval=FALSE}
+# Download master index for year 2010 to 2020
+edgar::getMasterIndex(2010:2020)
+```
+
+```{r eval=FALSE}
+# Load all information from Master Index .Rda files into a data frame
+master_index <- data.frame()
+for (i in 2010:2020){
+  file_name <- paste0("Master Indexes/", i, "master.Rda")
+  load(file_name)
+  index_h <- year.master %>%
+    filter(cik %in% c(company$CIK), form.type %in% c("10-K"))
+  
+  master_index <- rbind(master_index, index_h)
+}
+
+```
+
+
+```{r eval=FALSE}
+# Format column type for master Index
+master_index$cik <- as.character(master_index$cik) %>% as.integer()
+master_index$company.name <- as.character(master_index$company.name)
+master_index$form.type <- as.character(master_index$form.type)
+master_index$date.filed <- as.Date(master_index$date.filed)
+master_index$edgar.link <- as.character(master_index$edgar.link)
+master_index <- master_index %>%
+  mutate(year = format(as.Date(master_index$date.filed, "%Y, %m, %d"), "%Y"))
+master_index$year <- as.integer(master_index$year)
+
+# Rename Columns in Master Index
+colnames(master_index) <- c("CIK", "Security", "Form_Type", "Date_Filed", "Edgar_Link", "Quarter", "Year")
+
+master_index
+```
+
+```{r eval=FALSE, echo= FALSE}
+saveRDS(master_index, "master_index.rds")
+```
+
+```{r echo =FALSE}
+master_index_10K <- readRDS("master_index.rds")
+```
+
+
+## 1.3 Get Management Discussions & Analysis from Edgar
+
+```{r eval=FALSE}
+# Download management discussions
+edgar::getMgmtDisc(cik.no = company$CIK, filing.year = c(2010:2020))
+```
+
+
+```{r}
+# Combine management discussions in a dataframe
+mgmt_disc_df <- data.frame()
+
+file_list <- list.files("MD&A section Text")
+file_path <- paste0("MD&A section Text/", file_list)
+
+for (i in 1:length(file_path)) {
+  file <- readLines(file_path[i])
+  
+  mgmt_disc <- tibble(cik = as.integer(gsub("CIK:","",file[1])),
+                      company_name = (gsub("Company Name:","", file[2])),
+                      date_filed = gsub("Filing Date:","",file[4]),
+                      accession_no = gsub("Accession Number:","", file[5]),
+                      #remove punctuations, numbers and space
+                      mgmt_disc = gsub("as of","", tolower(file[8])) %>%
+                        tm::removePunctuation() %>%
+                        tm::removeNumbers()%>%
+                        tm::stripWhitespace())
+  
+  mgmt_disc_df <- bind_rows(mgmt_disc_df, mgmt_disc)
+}
+
+#Rename columns for Management Discussions Table
+colnames(mgmt_disc_df) <- c("CIK", "Company_Name", "Date_Filed", "Accession_Number", "Text")
+
+mgmt_disc_df$CIK <- as.character(mgmt_disc_df$CIK) %>% as.integer()
+mgmt_disc_df$Company_Name <- as.character(mgmt_disc_df$Company_Name)
+mgmt_disc_df$Date_Filed <- as.Date(mgmt_disc_df$Date_Filed)
+
+# Add in Year columns
+mgmt_disc_df <- mgmt_disc_df %>% mutate(Year = format(as.Date(mgmt_disc_df$Date_Filed, "%Y, %m, %d"), "%Y"))
+mgmt_disc_df$Year <- as.integer(mgmt_disc_df$Year)
+
+# Add in Quarter columns
+mgmt_disc_df <- mgmt_disc_df %>% mutate(Quarter = substr(quarters(as.Date(Date_Filed)), 2, 2))
+mgmt_disc_df$Quarter <- as.integer(mgmt_disc_df$Quarter)
+
+# Merge with Master Index Table
+merge_mda <- mgmt_disc_df %>% 
+  unique() %>% 
+  inner_join(company, by=c("CIK"="CIK"))
+
+merge_mda <- merge_mda %>%
+  select(CIK, Symbol, Security, Company_Name, GICS_Sub_Industry, Date_Filed, Quarter, Year, Accession_Number, Text)
+```
+
+
+```{r}
+saveRDS(merge_mda, "merge_mda.rds")
+```
+
+```{r}
+merge_mda <- readRDS("merge_mda.rds")
+```
+
+
+## 1.4 Import Stop Words
+
+We have imported Loughran and McDonalds stopwards in the website at https://sraf.nd.edu/textual-analysis/resources/
+
+```{r}
+# Stopwords from Loughran and McDonland's
+stopw_loughran_mcdonald <- read_excel("loughran_stopwords.xlsx")
+
+#Set columns structure
+stopw_loughran_mcdonald$word <- as.character(stopw_loughran_mcdonald$word)
+
+#Lowercase all words in table
+stopw_loughran_mcdonald$word <- tolower(stopw_loughran_mcdonald$word)
+
+# Add customised stopwords
+stopw_custom <- c("financial", "statement", "exhibit", "report", "figure", "fig", "table", "company", "footnote", "page")
+
+# Finalising stopwords
+stopw_final <- rbind(stopw_loughran_mcdonald, stopw_custom)
+```
+
+```{r}
+library(tidytext)
+library(httr)
+library(textclean)
+library(lexicon)
+data("stop_words") # Multilangual stopwords list
+data("sw_fry_1000") # Fry's 1000 Most Commonly Used English Words
+
+fry <- as.data.frame(lexicon::sw_fry_1000) %>% rename(word = `lexicon::sw_fry_1000`)
+
+# Create a function to automatically remove digit,
+# remove punctuations and transform all letters to lower
+stopword_funct <- function(x){
+  x <- gsub('[[:digit:]]+',' ', x)
+  x <- gsub('[[:punct:]]+',' ', x)
+  x <- tolower(x)
+  return(x)
+} 
+
+# Symbol as stopwords
+merge_mda$Symbol <- stopword_funct(merge_mda$Symbol)
+
+Symbol <- merge_mda %>% 
+  select(Symbol) %>%
+  unique(.)
+
+symbol_stopwords <- merge_mda$Symbol
+
+
+# Company name as stopwords
+merge_mda$Company_Name <- stopword_funct(merge_mda$Company_Name)
+
+company_name <- merge_mda %>% 
+  select(Company_Name) %>%
+  unnest_tokens(word, Company_Name) %>%
+  select(word) %>%
+  unique(.)
+
+company_name_stopwords <- company_name$word
+
+# GICS Sub Industry as stopwords
+merge_mda$GICS_Sub_Industry <- stopword_funct(merge_mda$GICS_Sub_Industry)
+
+subindustry <- merge_mda %>% 
+  select(GICS_Sub_Industry) %>%
+  unnest_tokens(word, GICS_Sub_Industry) %>%
+  select(word) %>%
+  unique(.)
+
+subindustry_stopwords <- subindustry$word
+
+custom_stopwords <- tibble(word = unique(c(company_name_stopwords, subindustry_stopwords, symbol_stopwords)), lexicon = "custom")
+
+# Create custom stop words list
+custom_stopwords <- rbind(stop_words, custom_stopwords)
+```
+
+
+## 1.5 Tokenisation
+```{r}
+# Tokenize and remove stopwords
+mda_tokens <- merge_mda %>%
+  unnest_tokens(word, Text) %>%
+  anti_join(custom_stopwords) %>%
+  anti_join(fry) %>%
+  anti_join(stopw_final) %>%
+  filter(! word %in% sw_fry_100) 
+
+format(length(mda_tokens$Accession_Number), big.mark = ",")
+
+head(mda_tokens, 10)
+```
+
+## 1.6 Stemming and Lemmatisation
+
+Download language model and define cores for parallel processing 
+```{r eval=FALSE, echo= FALSE}
+# Run approximately 20 mins
+# Download english model from udpipe
+langmodel_download <- udpipe::udpipe_download_model("english")
+
+# Load model
+langmodel <- udpipe::udpipe_load_model(langmodel_download$file_model)
+
+# Specify the number of cores
+no_cores <- parallel::detectCores() - 1
+
+# Run udpipe on tokenised management discussions
+postagged_mda <- udpipe:: udpipe(object = langmodel, x = mda_tokens$word, parallel.cores = no_cores,
+                    parallel.chunks = 100,
+                    trace = T)
+
+postagged_mda_df <- as.data.frame(postagged_mda)
+
+# Initiate cluster
+cl <- parallel::makeCluster(no_cores)
+
+# Stop cluster
+parallel::stopCluster(cl)
+```
+```{r eval=FALSE, echo= FALSE}
+saveRDS(postagged_mda_df, "postagged_tokens_mda.rds")
+```
+
+```{r}
+postagged_mda_df <- readRDS("postagged_tokens_mda.rds")
+```
+
+
+* Joining the lemmatized udpipe output of management discussions with the other variables in the data frame
+```{r}
+mda_tokens <- mda_tokens %>% 
+  mutate(doc_id = row_number())
+
+length(unique(mda_tokens$doc_id))
+length(unique(postagged_mda_df$doc_id))
+
+postagged_mda_df_joined <- postagged_mda_df  %>% 
+  mutate(doc_id = as.numeric(doc_id)) %>% 
+  left_join(mda_tokens)
+```
+
+* Removing short and long words from listings output of udpipe
+```{r}
+postagged_mda_df_joined$word_length <- nchar(postagged_mda_df_joined$lemma)
+
+quantile(postagged_mda_df_joined$word_length, c(0.025, 0.975))
+
+length(postagged_mda_df_joined$lemma)
+```
+
+
+
+```{r}
+#remove all words that are longer than 13 characters and shorter than 3 characters
+postagged_mda_df_joined_shortened <- postagged_mda_df_joined %>% filter(between(word_length, 4, 13))
+length(postagged_mda_df_joined_shortened$lemma)
+length(postagged_mda_df_joined$lemma) - length(postagged_mda_df_joined_shortened$lemma)
+```
+
+Out of 734,931 tokenised words, 52,544 words will be removed.
+
+## 1.7 Removing Stopwords again after lemmatisation on Management Discussions & Analysis
+```{r}
+# Removing stopwords again after lemmatisation
+postagged_mda_df_joined_short <- postagged_mda_df_joined_shortened %>% 
+  mutate(word = lemma) %>% 
+  anti_join(custom_stopwords ) %>%
+  anti_join(stopw_final) %>%
+  anti_join(fry) %>%
+  filter(! word %in% sw_fry_100) 
+length(postagged_mda_df_joined_short$lemma)
+
+# Calculate difference
+format((length(postagged_mda_df_joined_shortened$lemma) -length(postagged_mda_df_joined_short$lemma)), big.mark = ",")
+```
+
+After removing stopwords again, the tokenised words are further reduced by 98,488 words.
+
+```{r}
+saveRDS(postagged_mda_df_joined_short, "postagged_mda_df_joined_short")
+```
+
+```{r}
+clean_mda <- readRDS("postagged_mda_df_joined_short")
+```
+
+
+## 1.8 Performing TF-IDF
+```{r calc_word_counts}
+# Calculate word counts
+tokens_count_all <- clean_mda %>% 
+  count(lemma, sort = TRUE)
+
+tokens_count_mda <- clean_mda  %>%
+  group_by(Accession_Number) %>% 
+  count(lemma, sort = TRUE)
+```
+
+```{r tf-idf_calc}
+# TF_IDF on management discussions
+TF_IDF <- tokens_count_mda %>% 
+  bind_tf_idf(lemma, Accession_Number, n) %>% 
+  arrange(desc(tf_idf))
+
+TF_IDF
+```
+
+
+```{r}
+# Inspect TF-IDF cut-precentile 
+tf_idf_cutoffs <- quantile(TF_IDF$tf_idf, na.rm = T, c(0.025, 0.975))
+quantile(TF_IDF$tf_idf, na.rm = T, c(0.025, 0.975))
+```
+
+
+* Plotting TF_IDF
+```{r}
+TF_IDF %>% filter(tf_idf <0.0065) %>% 
+  ggplot(., aes(x=tf_idf, fill="blue")) + 
+  geom_histogram() +
+  labs(title="Distribution of TF-IDF", x="TF-IDF", y="Frequency") +
+  scale_y_continuous(labels=scales::comma)+ scale_fill_manual(values = c("blue")) +
+  theme(legend.position="none")
+```
+
+
+```{r eval=FALSE}
+short_merge_mda <- merge_mda %>%
+  select("CIK", "Symbol", "Security", "Company_Name", "GICS_Sub_Industry", "Date_Filed", "Year", "Accession_Number")
+
+#Remove tf_idf more than 0.004
+tidy_tf_idf <- TF_IDF %>% 
+  filter(tf_idf < 0.004 ) %>% 
+  mutate(word = lemma) %>% 
+  left_join(short_merge_mda)
+```
+
+```{r eval=FALSE}
+saveRDS (tidy_tf_idf, "tidy_mda.rds")
+```
+
+```{r}
+tidy_mda <- readRDS("tidy_mda.rds")
+```
+
+
+## 1.9 Analysis on TF-IDF
+
+```{r}
+#Analysis by Year
+year_tokens <- clean_mda %>% 
+  count(Year, word, sort=TRUE) %>% 
+  ungroup() %>%
+  bind_tf_idf(word,Year, n)
+
+# Plot important terms by years
+year_tokens %>%
+  arrange(desc(tf_idf)) %>%
+  mutate(word = factor(word, levels = rev(unique(word)))) %>%
+  group_by(Year) %>%
+  top_n(15) %>%
+  ungroup() %>%
+  ggplot(aes(word, tf_idf, fill=Year)) +
+  geom_col(show.legend = FALSE) +
+  labs (x=NULL, y="tf-idf", title="Important Terms by Year") +
+  facet_wrap(~ Year, ncol=3, scales = "free") + 
+  coord_flip()
+```
+
+
+
+```{r}
+#Analysis by GCIS Sub Industry
+gcis_tokens <- clean_mda %>% 
+  count(GICS_Sub_Industry, word, sort=TRUE) %>% 
+  ungroup() %>%
+  bind_tf_idf(word,GICS_Sub_Industry, n)
+
+# Plot important terms by years
+gcis_tokens %>%
+  arrange(desc(tf_idf)) %>%
+  mutate(word = factor(word, levels = rev(unique(word)))) %>%
+  group_by(GICS_Sub_Industry) %>%
+  top_n(15) %>%
+  ungroup() %>%
+  ggplot(aes(word, tf_idf, fill=GICS_Sub_Industry)) +
+  geom_col(show.legend = FALSE) +
+  labs (x=NULL, y="tf-idf", title="Important Terms by Sub Industry") +
+  facet_wrap(~ GICS_Sub_Industry, ncol=3, scales = "free") + 
+  coord_flip()
+```
+## 1.10 Analysis based on dominant words
+```{r}
+# Count and visualise the top 10 dominant words by GICS Sub Industry
+gcis <- clean_mda %>%
+  group_by(GICS_Sub_Industry) %>%
+  count(word, GICS_Sub_Industry) %>%
+  top_n(10,n) %>% ungroup() %>%
+  arrange(desc(n)) %>%
+  mutate(word2=fct_reorder(word, n))
+
+ggplot(gcis, aes(x=reorder(word2,n), y=n, fill=GICS_Sub_Industry)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~GICS_Sub_Industry, scales="free") +
+  coord_flip() + labs(title="DOMINANT WORDS PER SUB-INDUSTRY", x="Frequency", y="Words")
+```
+```{r}
+# Count and visualise the top 10 dominant words by Year
+year <- clean_mda %>%
+  group_by(Year) %>%
+  count(word, Year) %>%
+  top_n(10,n) %>% ungroup() %>%
+  arrange(desc(n)) %>%
+  mutate(word2=fct_reorder(word, n))
+
+ggplot(year, aes(x=reorder(word2,n), y=n, fill=Year)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~Year, scales="free") +
+  coord_flip() + labs(title="DOMINANT WORDS PER YEAR", x="Frequency", y="Words")
+```
+
+
+
+
+# 2. Part B: Sentiment association with Financial Indicator
+
+## 2.1 Polarity
+
+```{r}
+#detokenize
+detokens_all <- tidy_mda %>%
+  group_by(Accession_Number) %>%
+  summarise(clean_text  = paste(word,collapse = "  "), totalwords = n())  %>% 
+  dplyr::select(Accession_Number, clean_text) %>%
+  inner_join(merge_mda, by="Accession_Number")
+```
+
+```{r eval=FALSE}
+#Perform polarity on management discussions
+pol_all_mda <- qdap::polarity(detokens_all$clean_text)
+
+#Plot ploarity
+plot(pol_all_mda)
+```
+```{r eval=FALSE}
+saveRDS(pol_all_mda, "polarity_mda.rds")
+```
+
+```{r}
+pol_all_mda <- readRDS("polarity_mda.rds")
+```
+
+## 2.2 Calculating sentiment measures and loading to sentiment table
+
+```{r}
+#Importing Loughran & McDonald's Sentiment
+LM_dict <- read_xlsx("LoughranMcDonald_SentimentWordLists_2018 copy.xlsx")
+
+#Set columns structure
+LM_dict$sentiment <- as.character(LM_dict$sentiment)
+LM_dict$word <- as.character(LM_dict$word)
+
+#Lowercase all words in table
+LM_dict$sentiment <- tolower(LM_dict$sentiment)
+LM_dict$word <- tolower(LM_dict$word)
+head(LM_dict, 10)
+```
+
+```{r}
+#Creating dummy dictionaries
+dummy_LM <- tibble(Accession_Number = 'dummy', 
+                   positive=0, 
+                   negative=0, 
+                   uncertainty=0, 
+                   litigious=0, 
+                   strong_modal=0, 
+                   weak_modal=0,
+                   constraining=0 )
+
+dummy_NRC <- tibble(Accession_Number = 'dummy',
+                    positive=0,
+                    negative=0,
+                    anger=0,
+                    fear=0,
+                    trust=0,
+                    sadness=0,
+                    suprise=0,
+                    disgust=0,
+                    joy=0,
+                    anticipation=0 )
+
+dummy_bing <- tibble(Accession_Number = 'dummy', 
+                     positive=0, 
+                     negative=0 )
+```
+
+
+```{r}
+# Unnest_tokens again to get clean text
+tokenised <- detokens_all %>%
+  unnest_tokens(word, clean_text)
+```
+
+
+```{r eval=FALSE}
+# Text complexity
+n_words <- tokenised %>%
+  group_by(word, Accession_Number) %>%
+  count (Accession_Number)
+
+n_complex <- tokenised %>%
+  group_by(word, Accession_Number) %>%
+  mutate(complexity = nchar(gsub("[^X]", "", gsub("[aeiouy]+", "X", tolower (word))))) %>%
+  filter(complexity>=3) %>%
+  group_by(Accession_Number) %>%
+  count(Accession_Number)
+
+complexity <- tibble(Accession_Number = n_words$Accession_Number,
+                     complexity = n_complex$n/n_words$n)
+
+```
+
+```{r eval=FALSE}
+saveRDS(complexity, "complexity.rds")
+```
+
+```{r}
+complexity <- readRDS("complexity.rds")
+```
+
+
+```{r}
+# Sentiment Loughran Mcdonald
+tokens_LM <- tidy_mda %>%
+  inner_join(LM_dict, by=c("word"="word"))
+
+word_count_LM <- tokens_LM %>% 
+  group_by(Accession_Number) %>% 
+  summarise(LM_total_words=n())
+
+sentiment_LM <- tokens_LM %>%
+  group_by(Accession_Number, sentiment) %>%
+  summarise(total_sentiment = n()) %>%
+  spread(sentiment, total_sentiment, fill=0) %>%
+  bind_rows(dummy_LM) %>%
+  left_join(word_count_LM) %>%
+  mutate(LM_sent = positive-negative,
+         LM_positive = positive/LM_total_words,
+         LM_negative = negative/LM_total_words,
+         LM_litigious = litigious/LM_total_words,
+         LM_uncertainty = uncertainty/LM_total_words,
+         LM_constraining = constraining/LM_total_words ) %>%
+  select(-c(positive, negative, litigious, uncertainty, constraining)) %>%
+  filter(Accession_Number !="dummy")
+
+# Sentiment Affin
+tokens_afinn <- tokenised %>%
+  inner_join(get_sentiments("afinn"))
+
+sentiment_afinn <- tokenised %>%
+  inner_join(get_sentiments("afinn")) %>%
+  group_by(Accession_Number) %>%
+  summarise(affin_sent =sum(value))
+
+# Sentiment Bing
+tokens_bing <- tokenised %>%
+  inner_join((get_sentiments("bing")))
+
+word_count_bing <- tokens_bing %>%
+  group_by(Accession_Number) %>%
+  summarise(bing_total_words = n())
+
+sentiment_bing <- tokens_bing %>%
+  group_by(Accession_Number, sentiment) %>%
+  summarise(total_sentiment=n()) %>%
+  spread(sentiment, total_sentiment, fill=0) %>%
+  bind_rows(dummy_bing) %>%
+  left_join(word_count_bing) %>%
+  mutate(bing_sent=positive-negative,
+  bing_positive = positive/bing_total_words,
+  bing_negative = negative/bing_total_words) %>%
+  select(-c(positive, negative)) %>%
+  filter(Accession_Number !='dummy')
+
+# Sentiment NRC
+tokens_nrc <- tokenised %>% inner_join(get_sentiments("nrc"))
+
+word_count_nrc <- tokens_nrc %>% 
+  group_by(Accession_Number) %>% 
+  summarise(nrc_total_words =n())
+
+sentiment_nrc <- tokens_nrc %>% 
+  group_by(Accession_Number, sentiment) %>%
+  summarise(total_sentiment=n()) %>%
+  spread(sentiment, total_sentiment, fill=0) %>%
+  bind_rows(dummy_NRC) %>%
+  left_join(word_count_nrc) %>%
+  mutate(nrc_sent=positive-negative,
+  NRC_positive = positive/nrc_total_words,
+  NRC_negative = negative/nrc_total_words,
+  NRC_anger = anger/nrc_total_words,
+  NRC_fear = fear/nrc_total_words,
+  NRC_trust = trust/nrc_total_words,
+  NRC_sadness = sadness/nrc_total_words,
+  NRC_surprise = surprise/nrc_total_words,
+  NRC_disgust = disgust/nrc_total_words,
+  NRC_joy = joy/nrc_total_words,
+  NRC_anticipation = anticipation/nrc_total_words) %>%
+  select(-c(positive, negative, anger, fear, trust, sadness, suprise, disgust,joy, anticipation)) %>%
+  filter(Accession_Number !='dummy')
+```
+
+```{r}
+# Merging sentiment features
+sentiment_df <- sentiment_LM %>%
+  left_join(complexity) %>%
+  left_join(sentiment_afinn) %>%
+  left_join(sentiment_bing) %>%
+  left_join(sentiment_nrc)
+```
+
+
+
+
+
+## 2.3 Analysis From Word Perspective
+
+To understand the most common positive and negative words in the mda, we apply these 3 dictionaries above on sentiment analysis.
+
+```{r}
+# Plot common positive and negative words using Bing dictionary
+tokens_bing %>% ungroup()  %>% 
+  count(word, sentiment, sort = TRUE) %>% 
+  mutate(word = reorder(word, n)) %>% 
+  group_by(sentiment) %>% 
+  top_n(25) %>%
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free") +
+  labs(y = "Contribution to sentiment - Bing Dictionary", x = NULL) +
+  coord_flip() +
+  ggtitle('Words Contributing to Positive & Negative Sentiment in Management Discussions & Analysis')
+
+```
+
+```{r}
+# Plot common positive and negative words using Affin dictionary
+afinn_word_counts <-  tokenised %>%
+  inner_join(get_sentiments("afinn")) %>% 
+  ungroup()  %>% 
+  mutate(sentiment = ifelse(value>0,"positive","negative")) %>% 
+  count(word, sentiment, sort = TRUE)
+
+afinn_word_counts %>%
+  mutate(word = reorder(word, n)) %>% group_by(sentiment) %>% 
+  top_n(25) %>%
+  ggplot(aes(word, n, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free") +
+  labs(y = "Contribution to sentiment - Affin Dictionary", x = NULL) +
+  coord_flip() +
+  ggtitle('Words Contributing to Positive & Negative Sentiment in Management Discussions & Analysis')
+
+```
+
+## 2.4 Get Stock Information
+
+```{r}
+merge_mda <- readRDS("merge_mda.rds")
+```
+
+```{r eval=FALSE}
+# Get Average Log Return for each company
+merge_mda$Symbol <- as.factor(merge_mda$Symbol)
+
+stockreturn_adj_price <-data.frame()
+
+for (r in 1: nrow(merge_mda)){
+  tryCatch({
+    mda_report <- merge_mda [r, ]
+    
+    # Extract stock information
+    stock_data <- BatchGetSymbols(tickers = mda_report$Symbol,
+                                  first.date = mda_report$Date_Filed -7,
+                                  last.date = mda_report$Date_Filed +3,
+                                  type.return="log")
+    
+    # FIler the second day and last day
+    stock_data_filtered <- stock_data [[2]] %>%
+      filter(ref.date == max(ref.date) | row_number()==2) %>%
+      arrange(desc(ref.date))
+    
+    # Calculate stock price change on log scale
+    return_adj_price <- mda_report %>% select(Accession_Number) %>% 
+      mutate(return_adj_price=stock_data_filtered$ret.closing.prices[1] - stock_data_filtered$ret.closing.prices[2]) #return difference
+    
+    price_adj_ratio <- mda_report %>% select(Accession_Number) %>%
+      mutate(price_adj_ratio = (stock_data_filtered$price.adjusted[1]/ stock_data_filtered$price.adjusted[2]) - 1) # stock price ratio
+    
+    accession_number <- mda_report$Accession_Number[1]
+  })
+  stockreturn_adj_price <- rbind(stockreturn_adj_price, return_adj_price)
+}
+
+```
+
+```{r eval=FALSE}
+saveRDS(stockreturn_adj_price, "stockreturn_adj_price.rds")
+```
+
+```{r}
+stockreturn_adj_price <-readRDS("stockreturn_adj_price.rds")
+```
+
+```{r}
+# Merge stock adjustment price with Master Index
+stockreturn_adj_pricev <- merge_mda %>% inner_join(stockreturn_adj_price, by=c("Accession_Number"="Accession_Number"))
+stockreturn_adjusted_price <- stockreturn_adj_pricev %>% select(-c(Text))
+```
+
+```{r eval=FALSE}
+# Get Prie Adjustment Ratio for each company 
+stockprice_adj_ratio <-data.frame()
+
+for (r in 1: nrow(merge_mda)){
+  tryCatch({
+    mda_report <- merge_mda [r, ]
+    
+    # Extract stock information
+    stock_data <- BatchGetSymbols(tickers = mda_report$Symbol,
+                                  first.date = mda_report$Date_Filed -7,
+                                  last.date = mda_report$Date_Filed +3,
+                                  type.return="log")
+    
+    # Filter the second day and last day
+    stock_data_filtered <- stock_data [[2]] %>%
+      filter(ref.date == max(ref.date) | row_number()==2) %>%
+      arrange(desc(ref.date))
+    
+    # Calculate stock price change on log scale
+    return_adj_price <- mda_report %>% select(Accession_Number) %>% 
+      mutate(return_adj_price=stock_data_filtered$ret.closing.prices[1] - stock_data_filtered$ret.closing.prices[2]) #return difference
+    
+    price_adj_ratio <- mda_report %>% select(Accession_Number) %>%
+      mutate(price_adj_ratio = (stock_data_filtered$price.adjusted[1]/ stock_data_filtered$price.adjusted[2]) - 1) # stock price ratio
+    
+    accession_number <- mda_report$Accession_Number[1]
+  })
+  stockprice_adj_ratio <- rbind(stockprice_adj_ratio, price_adj_ratio)
+}
+
+```
+
+```{r eval=FALSE}
+saveRDS(stockprice_adj_ratio, "stockprice_adj_ratio.rds")
+```
+
+```{r}
+price_adj_ratiov <-readRDS("stockprice_adj_ratio.rds")
+```
+
+```{r}
+# Merge stock adjustment price ratio with Master Index
+price_adj_ratio_merge <- merge_mda %>% inner_join(price_adj_ratiov, by=c("Accession_Number"="Accession_Number"))
+price_adj_ratio_merge <- price_adj_ratio_merge %>% select(-c(Text))
+```
+
+
+```{r}
+# Plot Average Return
+stockreturn_adjusted_price$Year <- as.factor(stockreturn_adjusted_price$Year)
+return_avg <- stockreturn_adjusted_price %>%
+              group_by(GICS_Sub_Industry, Year) %>%
+              summarise(return_adj_price = mean(return_adj_price))
+
+return_avg_plot <- return_avg %>%
+  ggplot(aes(x = Year, y = return_adj_price, color = GICS_Sub_Industry)) +
+  geom_line(aes(group=GICS_Sub_Industry)) +
+  labs(title = "Average Log Return between 2010 and 2020 After SEC Filings", 
+       subtitle = "Grouping on GICS Sectors", x="Year Filed", y = "Log Return", legend = "GICS Sector") 
+
+# Plot Average Stock Price Change
+price_adj_ratio_merge$Year <- as.factor(price_adj_ratio_merge$Year)
+
+price_avg <- price_adj_ratio_merge %>%
+              group_by(GICS_Sub_Industry, Year) %>%
+              summarise(price_adj_ratio = mean(price_adj_ratio))
+
+price_adj_plot <- price_avg %>%
+  ggplot(aes(x = Year, y = price_adj_ratio, color = GICS_Sub_Industry)) +
+  geom_line(aes(group=GICS_Sub_Industry)) +
+  labs(title = "Average Stock Price Change between 2010 and 2020 After SEC Filings", 
+       subtitle = "Grouping on GICS Sectors", x="Year Filed", y = "% Change in Stock Price", legend = "GICS Sector") 
+
+library(ggpubr)
+
+ggarrange(return_avg_plot, price_adj_plot, ncol = 1, nrow = 2)
+
+```
+
+
+
+```{r}
+# Combine Return Adjusted Price and Price Adjusted Ratio data
+v <- price_adj_ratio_merge %>% 
+  select(price_adj_ratio, Accession_Number) %>% 
+  left_join(stockreturn_adjusted_price)
+
+# Combine price data with postagged management discussion and analysis table
+clean_mda_price <- v %>% 
+  select(Accession_Number,price_adj_ratio, return_adj_price) %>%
+  inner_join(clean_mda, by=(c("Accession_Number" = "Accession_Number")))
+
+# Joining sentiment features with price
+sentiment_data <- sentiment_df %>% left_join(price_adj_ratio_merge)
+```
+
+## 2.5 Regression Analysis on How Sentiment Analysis Affects Stock Price Change
+
+```{r}
+sentiment_regression <- sentiment_data %>%
+  select(-c(Year, CIK, Company_Name, GICS_Sub_Industry, Accession_Number, Symbol, Security, Date_Filed, Quarter))
+
+  str(sentiment_regression)
+
+reg_LM <- lm(price_adj_ratio ~ strong_modal + weak_modal + LM_total_words + LM_sent + LM_positive + LM_negative + LM_litigious + LM_uncertainty + LM_constraining, data=sentiment_regression)
+
+reg_bing <- lm(price_adj_ratio ~ bing_total_words+ bing_sent+ bing_positive+ bing_negative, data=sentiment_regression)
+
+reg_afinn <- lm(price_adj_ratio ~ affin_sent, data=sentiment_regression)
+
+reg_nrc <- lm(price_adj_ratio ~ nrc_total_words + nrc_sent + NRC_positive + NRC_negative + NRC_anger +      
+ NRC_fear + NRC_trust + NRC_sadness + NRC_surprise + NRC_disgust + NRC_joy + NRC_anticipation, data=sentiment_regression)
+
+reg_final <- stargazer::stargazer(reg_LM, reg_bing, reg_afinn, reg_nrc, type='text')
+
+```
+
+## 2.6 Model Sentiment by GICS Sub Industry
+
+```{r eval=FALSE}
+# Model sentiment for every sub industry
+model_output_sub_industry <- data.frame()
+
+sector <- price_adj_ratio_merge %>% select(GICS_Sub_Industry)
+
+for (z in 1:length(sector)) {
+  model_data <- sentiment_data %>%
+  # filter(GICS_Sub_Industry==sector[z]) %>%
+    select(-c(Year, CIK, Company_Name,Symbol, Security, Date_Filed, Quarter))
+  
+# Modelling
+  model <- lm(price_adj_ratio ~., data = model_data)
+  
+# Prep data for plotting
+  local_df <- head(as.data.frame(summary(model)$coefficients) %>%
+                     tibble::rownames_to_column() %>%
+                     #mutate(absolute_t_value = abs('t value')) %>%
+                     #arrange(desc(absolute_t_value)), 10) %>%
+                     mutate(rowname = factor(rowname, levels = rowname)) %>%
+    mutate(significance = case_when('Pr(>|t|)' <= 0.001 ~ 'significant***', 
+                                    'Pr(>|t|)' <= 0.01 ~ 'significant**', 
+                                    'Pr(>|t|)' <= 0.05 ~ 'significant*', 
+                                    TRUE ~ 'not significant')) %>%
+    mutate(GICS_Sub_Industry = sub_industry[z]) %>%
+    mutate(r_squared = paste('Multiple R-Squared:', as.character(round(summary(model)$r.squared,3))))
+  
+  model_output_sub_industry<- rbind(model_output_sub_industry, local_df)
+  
+}
+
+ggplot(model_output_sub_industry, 
+       aes(x = reorder(rowname, absolute_t_value), 
+           y = absolute_t_value, fill = significance)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Top 10 Sentiment Features for Predicting Stock Price Change After 10-K Filings", 
+       subtitle = "Grouping on GICS Sub Industry", y= "Absolute t-value", x="Features") + 
+  ylim(0,4) + coord_flip() +
+  facet_wrap(~GICS_Sub_Industry+r_squared, ncol = 4, scales = "free")
+
+rm(model_output_sub_industry)
+```
+
+
+## 2.7 Additional Analysis on Classification By Emotion
+
+```{r}
+# NRC Dictionary
+tidy_mda %>% inner_join(get_sentiments("nrc")) %>%
+  count(sentiment,CIK) %>%
+  pivot_wider(names_from = sentiment,values_from = n) %>%
+  replace_na(list(anticipation=0,joy=0,positive=0,surprise=0,trust=0,anger=0,disgust=0,fear=0,negative=0,sadness=0)) %>%                           #replace NA with reasonable 0
+  mutate(sentiment_nrc = positive-negative) -> emotions_nrc
+emotions_nrc <- emotions_nrc %>%
+  left_join(price_adj_ratio_merge)
+
+# Plot distribution of emotions
+tidy_mda %>% inner_join(get_sentiments("nrc"),by ="word") %>%
+  count(sentiment,CIK) %>% 
+  mutate(index = row_number()) %>% 
+  filter(!sentiment %in%c("positive", "negative")) %>%
+  ggplot(aes(x=reorder(sentiment,n), y=n, color=sentiment)) %>%
+  + geom_col() + labs(title="Sentiments Count\n(classification by emotion)",x="Sentiment Categories",y="Frequency")
+```
+
+
+
+
+
+# 3. Part C: Topic Modelling and Latent Dirichlet Allocation (LDA)
+
+## 3.1 Structural Topic Modelling (STM)
+
+### 3.1.1 Processing text data in STM
+```{r eval=FALSE}
+# Reading and processing text data
+mda.df <- as.data.frame(clean_mda_price)
+
+mda.df <- mda.df %>% 
+  filter(upos %in% c("VERB", "NOUN", "ADJ")) %>%
+  group_by(Accession_Number) %>%
+  summarise(documents_pos_tagged=paste(lemma, collapse=" "))
+
+subset_mda <- clean_mda_price %>% 
+  select(Accession_Number, Year, price_adj_ratio, return_adj_price)
+
+mda_new <- mda.df %>% 
+  left_join(subset_mda) %>% 
+  distinct(.)
+
+mda_new <- mda_new %>% 
+  na.omit(.)
+```
+```{r eval=FALSE}
+saveRDS(mda_new, "mda_new.rds")
+```
+
+```{r}
+mda_new <- readRDS("mda_new.rds")
+```
+
+```{r eval=FALSE}
+#Prepare: Associating Text with Metadata
+mda_processed <- stm::textProcessor(mda_new$documents_pos_tagged,
+                                   metadata = mda_new,
+                                   lowercase = FALSE, #not required since this was done by unnest_tokens before
+                                   removestopwords = FALSE, #not required since we removed stopwords already
+                                   removenumbers = FALSE, #not required since we removed them already
+                                   removepunctuation = FALSE, #not required since we removed them already
+                                   ucp = FALSE,
+                                   stem = FALSE) #not required since the input data was already stemmed & lemmatized by udpipe
+
+```
+
+```{r eval=FALSE}
+saveRDS(mda_processed, "mda_processed.rds")
+```
+
+```{r}
+mda_processed <- readRDS("mda_processed.rds")
+```
+
+
+```{r}
+#Keep those words who appear more than 1% in the document corpus
+threshold <- round(1/100 * length(mda_processed$documents),0)
+
+out <- prepDocuments(mda_processed$documents, 
+                     mda_processed$vocab,
+                     mda_processed$meta,
+                     lower.thresh = threshold)
+```
+
+```{r eval=FALSE}
+saveRDS(out, "out.rds")
+```
+
+```{r}
+out <- readRDS("out.rds")
+```
+
+### 3.1.2 Executing the STM Model
+```{r eval=FALSE}
+#Finding the optimal number of topics for mda by setting K=0
+
+mda_stm <- stm::stm(documents = out$documents,
+                   vocab = out$vocab,
+                   K = 0,
+                  prevalence =~ price_adj_ratio,
+                  max.em.its = 10,
+                  data = out$meta,
+                  reportevery=10,
+                  sigma.prior = 0.7,
+                  init.type = "Spectral")
+```
+
+```{r eval=FALSE}
+saveRDS(mda_stm, "mda_stm_k0.rds")
+```
+
+```{r}
+mda_stm_k0 <- readRDS("mda_stm_k0.rds")
+```
+
+
+```{r}
+# Preview all topics when k=0
+summary(mda_stm_k0)
+```
+
+```{r eval=FALSE}
+#Finding the optimal number of topics
+num_topics <- stm::searchK(out$documents,out$vocab,
+                     K=c(15, 25, 30, 35, 40),
+                     prevalence=~price_adj_ratio, 
+                     data=out$meta)
+```
+
+```{r eval=FALSE}
+saveRDS(num_topics, "num_topics.rds")
+```
+
+```{r}
+num_topics <- readRDS("num_topics.rds")
+```
+
+
+```{r}
+#Plot the stm object to view the percentage of topics in the corpus for k=0
+plot(num_topics)
+
+```
+
+The likelihood is the highest at 35 and residual is lowest at 35. Hence, our ideal number of topics would be 35 topics.
+
+
+```{r}
+# Analysing exclusivity vs semantic coherence 
+num_topics$results %>%
+  select(K, exclus, semcoh) %>%
+  filter(K %in% c(15, 20, 25, 30, 35)) %>%
+  unnest() %>%
+  mutate(K = as.factor(K)) %>%
+  ggplot(aes(semcoh, exclus, color = K)) +
+  geom_point(size = 2, alpha = 0.7) +
+  labs(x = "Semantic Coherence",
+       y = "Exclusivity",
+       title = "Comparing exclusivity and semantic coherence",
+       subtitle = "K = 30 has both high exclusivity and semantic coherence")
+```
+Looking at semantic coherence and exclusivity, it would seem that the best topic is 35 as marked by the purple dot as it is relatively high for exclusivity and semantic coherence.
+
+
+### 3.1.3 Displaying words associated with topics in STM
+
+```{r eval=FALSE}
+# Now that we have the number of ideal topics, let's execute the model
+# Executing the Model when K=35
+mda_stm_35 <- stm(documents = out$documents,
+                   vocab = out$vocab,
+                   K = 35,
+                  prevalence =~ price_adj_ratio,
+                  max.em.its = 40,
+                  data = out$meta,
+                  reportevery=3,
+                  sigma.prior = 0.7,
+                  init.type = "Spectral")
+```
+
+```{r eval=FALSE}
+saveRDS(mda_stm_35, "mda_stm_35.rds")
+```
+
+```{r}
+mda_stm_35 <- readRDS("mda_stm_35.rds")
+```
+
+```{r}
+plot(mda_stm_35)
+```
+
+```{r}
+library(reshape)
+library(tm)
+library(wordcloud)
+
+
+cloud(mda_stm_35,topic = 1)
+cloud(mda_stm_35,topic = 2)
+cloud(mda_stm_35,topic = 3)
+cloud(mda_stm_35,topic = 4)
+cloud(mda_stm_35,topic = 5)
+cloud(mda_stm_35,topic = 6)
+cloud(mda_stm_35,topic = 7)
+cloud(mda_stm_35,topic = 8)
+cloud(mda_stm_35,topic = 9)
+cloud(mda_stm_35,topic = 10)
+cloud(mda_stm_35,topic = 11)
+cloud(mda_stm_35,topic = 12)
+cloud(mda_stm_35,topic = 13)
+cloud(mda_stm_35,topic = 14)
+cloud(mda_stm_35,topic = 15)
+cloud(mda_stm_35,topic = 16)
+cloud(mda_stm_35,topic = 17)
+cloud(mda_stm_35,topic = 18)
+cloud(mda_stm_35,topic = 19)
+cloud(mda_stm_35,topic = 20)
+cloud(mda_stm_35,topic = 21)
+cloud(mda_stm_35,topic = 22)
+cloud(mda_stm_35,topic = 23)
+cloud(mda_stm_35,topic = 24)
+cloud(mda_stm_35,topic = 25)
+cloud(mda_stm_35,topic = 26)
+cloud(mda_stm_35,topic = 27)
+cloud(mda_stm_35,topic = 28)
+cloud(mda_stm_35,topic = 29)
+cloud(mda_stm_35,topic = 30)
+cloud(mda_stm_35,topic = 31)
+cloud(mda_stm_35,topic = 32)
+cloud(mda_stm_35,topic = 33)
+cloud(mda_stm_35,topic = 34)
+cloud(mda_stm_35,topic = 35)
+```
+
+
+
+
+```{r eval=FALSE}
+# We found similarity in some topics and after analysing, noted it can further summarise into 10 topics
+# Executing the Model when K=10
+mda_stm_10 <- stm(documents = out$documents,
+                   vocab = out$vocab,
+                   K = 10,
+                  prevalence =~ price_adj_ratio,
+                  max.em.its = 40,
+                  data = out$meta,
+                  reportevery=3,
+                  sigma.prior = 0.7,
+                  init.type = "Spectral")
+```
+
+```{r eval=FALSE}
+saveRDS(mda_stm_10, "mda_stm_10.rds")
+```
+
+```{r}
+mda_stm_10 <- readRDS("mda_stm_10.rds")
+```
+
+
+```{r}
+cloud(mda_stm_10,topic = 1)
+cloud(mda_stm_10,topic = 2)
+cloud(mda_stm_10,topic = 3)
+cloud(mda_stm_10,topic = 4)
+cloud(mda_stm_10,topic = 5)
+cloud(mda_stm_10,topic = 6)
+cloud(mda_stm_10,topic = 7)
+cloud(mda_stm_10,topic = 8)
+cloud(mda_stm_10,topic = 9)
+cloud(mda_stm_10,topic = 10)
+```
+
+
+### 3.1.4 Plotting relationship between metadata and topics using estimateEffect() in STM
+
+```{r}
+#Extracting theta matrix from the fitted object
+convergence_theta_mda <- as.data.frame(mda_stm_10$theta)
+
+colnames(convergence_theta_mda) <- paste0("topic_",1:10)
+
+```
+
+
+```{r}
+#Estimate regression using an STM object to incorporate measurement uncertainty from the STM model using the method of composition.
+price_adj_ratio_effect <- stm::estimateEffect(~as.numeric(price_adj_ratio),
+                                      stmobj = mda_stm_10,
+                                      metadata = out$meta,
+                                      uncertainty = c("None"))
+
+topic_proportion <- colMeans(mda_stm_10$theta)
+
+#label the topics
+topic_labels_stm <- c("Business settlement",
+                  "Financial statement",
+                  "Revenue management",
+                  "Business investment",
+                  "Business expansion",
+                  "Reneue growth",
+                  "Forecast",
+                  "Equity management",
+                  "Fiscal management",
+                  "Liability management")
+```
+
+
+```{r}
+# Plot the effects for score rating
+plot(price_adj_ratio_effect, covariate = "price_adj_ratio",
+     topics = c(1,2,3,4,5,6,7,8,9,10),
+     model = mda_stm_10, method = "difference",
+     cov.value1 = "100", cov.value2 = "0",
+     #xlim = c(-0.010, 0.008),
+     xlab = "Low Price Adj Ratio ... High Price Adj Ratio",
+     main = "Marginal Effects on Stock Price Adjustment Ratio",
+     ci.level = 0.05,
+     custom.labels =topic_labels_stm,
+     labeltype = "custom")
+
+# Plot the summary effects for price
+plot(price_adj_ratio_effect, covariate = "price_adj_ratio",
+     topics = c(1:10),
+     model = mda_stm_10, method = "continuous",
+     cov.value1 = margin2, cov.value2 = margin1,
+     xlab = "Low Price Adj Ratio ... High Price Adj Ratio",
+     main = "Marginal Change on Topic Probabilities for Low and High Price Adjustment Ratio",
+     custom.labels =topic_labels_stm,
+     ci.level = 0.05,
+     labeltype = "custom")
+
+```
+
+```{r}
+## Extracting the theta matrix
+convergence_theta <- as.data.frame(mda_stm_10$theta)
+colnames(convergence_theta)<-paste0("topic_", 1:10)
+
+#assigning topic summary, proportions and labels to variables
+topic_summary <- summary(mda_stm_10)
+topic_proportions <- colMeans(mda_stm_10$theta)
+topic_labels <- paste0("topic_",1:10)
+
+#wordcloud for topics
+stm::cloud(mda_stm_10)
+
+td_beta <- tidy(mda_stm_10)
+
+td_beta
+
+# Calculate stm result for top 20 terms
+top_terms <- 
+  td_beta %>%
+  group_by(topic) %>%
+  slice_max(beta, n = 20) %>%
+  ungroup() %>%
+  arrange(topic, desc(beta))
+
+# Plot stm result for top 20 terms
+plot <- top_terms %>%
+  mutate(term= reorder(term, beta), topic = factor(topic, labels = topic_labels_stm)) %>%
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, ncol = 6, scales = "free") +
+  labs (x="Terms", y="Beta", title="Top 20 Terms per Topic Modelling in STM")
+  scale_y_reordered()
+
+plot
+```
+
+```{r}
+library(ggthemes)
+library(scales)
+library(purrr)
+
+td_gamma <- tidy(mda_stm_10, 
+               matrix = "gamma",
+               document_names = rownames(out$documents))
+td_gamma
+
+gamma_terms <- td_gamma %>%
+  group_by(topic) %>%
+  summarise(gamma = mean(gamma)) %>%
+  arrange(desc(gamma)) %>%
+  left_join(top_terms, by = "topic") %>%
+  mutate(topic = paste0("Topic ", topic),
+         topic = reorder(topic, gamma))
+
+gamma_terms %>%
+  select(topic, gamma, term) %>%
+  knitr::kable(digits = 3, 
+        col.names = c("Topic", "Expected topic proportion", "Top 10 terms"))
+
+# Tidying it up
+gamma_topics <- td_gamma %>%
+pivot_wider(names_from = topic, values_from = gamma)
+
+# Adding column name
+colnames(gamma_topics) <- c("document",topic_labels)
+
+#remove the document from the column
+gamma_topics <- as.data.frame(gamma_topics)
+rownames(gamma_topics) <- gamma_topics$document
+gamma_topics$document <- NULL
+
+#perform PCA
+pcav <- FactoMineR::PCA(gamma_topics, graph = FALSE)
+factoextra::fviz_pca_var(pcav, alpha.var = .5)
+factoextra::fviz_screeplot(pcav, addlabels = TRUE) + theme_classic()
+```
+The variance explained is shown as high which is a good indication that we have the relevant number of topics.
+
+
+
+## 3.2 Latent Dirichlet Allocation (LDA)
+
+### 3.2.1 Processing text data in LDA
+
+```{r}
+# Filtering to retain only verbs, nouns and adjectives
+mda_filtered <- clean_mda_price%>% filter(upos %in% c("VERB", "NOUN", "ADJ"))
+mda_filtered <- mda_filtered %>% select(Accession_Number, price_adj_ratio, return_adj_price, lemma, price_adj_ratio)
+
+# Casting dtm grouping the words by review id
+mda_dtm <- mda_filtered %>% count(Accession_Number, lemma) %>% cast_dtm(Accession_Number, lemma,n)
+
+mda_sel_idx <- slam::row_sums(mda_dtm) > 0
+mda_dtm <- mda_dtm[mda_sel_idx, ]
+```
+
+### 3.2.2 Executing the LDA Model
+
+```{r}
+# Computing LDA model to obtain the details of the model fit outlining how words are associated to topics and how topics are associated to documents.
+LDA_mda <- topicmodels::LDA(mda_dtm, k=10, method="Gibbs", control = list(seed= 1234))
+
+# Obtaining the per-word-per-topic probability, where the model computes the probability of a specific term being generated from a specific topic.
+topics_mda <- tidy(LDA_mda,matrix="beta")
+```
+
+```{r eval=FALSE}
+saveRDS(topics_mda, "topics_mda_lda.rds")
+```
+
+```{r}
+topics_mda_lda <- readRDS("topics_mda_lda.rds")
+```
+
+### 3.2.3 Displaying words associated with topics in LDA
+
+```{r}
+#obtaining the 10 most common terms per topic
+top_terms_mda <- topics_mda_lda %>% group_by(topic) %>% top_n(20, beta) %>% ungroup() %>% arrange(topic, -beta)
+
+topic_labels_mda <- c("Business investment",
+                  "Financial statement",
+                  "Revenue management",
+                  "Business settlement",
+                  "Fiscal management",
+                  "Business operation",
+                  "Forecast",
+                  "Revenue growth",
+                  "Business expansion",
+                  "Liability management")
+
+top_terms_mda %>% mutate(term= reorder(term, beta), topic = factor(topic, labels = topic_labels_mda)) %>% ggplot(aes(term, beta, fill=topic))+ geom_col()+ facet_wrap(~topic, scales="free")+ coord_flip() + labs(fill="Topic", y= "Term", x = "Beta") 
+
+```
+
+
+## 3.3 Additive predictability
+
+Using regression model to estimate additive predictability of management's discussion and analysis topics on price adjustment ratio.
+
+```{r}
+#Creating a simple regression table using the lm() functions.
+mda_to_regress_topic <- cbind(out$meta, convergence_theta_mda)
+
+mda_model_topic_price <- lm(price_adj_ratio~ topic_1+topic_2+topic_3+topic_4+topic_5+topic_6+topic_7,
+                         data = mda_to_regress_topic)
+```
+
+### 3.3.1 Corpus level summaries using stargazer on management discussions & analysis
+
+```{r}
+#Run stargazer and carry out labelling adjustment
+stargazer::stargazer(mda_model_topic_price,
+          title="Regression Results",
+          align=TRUE,
+          type="text",
+          covariate.labels = c("Business investment",
+                  "Financial statement",
+                  "Revenue management",
+                  "Business settlement",
+                  "Fiscal management",
+                  "Business operation",
+                  "Forecast",
+                  "Revenue growth",
+                  "Business expansion",
+                  "Liability management"),
+          omit.stat=c("LL","ser","f"))
+```
+### 3.3.2 Corpus level summaries using topicCorr on management discussions & analysis
+
+```{r}
+topicCorr_review <- plot(stm::topicCorr(mda_stm_10), 
+                         method=c("simple"), 
+                         verbose=TRUE, 
+                         vlabels = topic_labels)
+```
+#4. References
+
+[1] Csardi G, Nepusz T: The igraph software package for complex network research, InterJournal, Complex Systems 1695. 2006. https://igraph.org
+
+[2] David Robinson (2020). widyr: Widen, Process, then Re-Tidy
+Data. R package version 0.1.3. https://CRAN.R-project.org/package=widyr
+
+[3] Emil Hvitfeldt (2020). textdata: Download and Load Various Text Datasets. R package version 0.4.1. https://CRAN.R-project.org/package=textdata
+
+[4] Erichson NB, Voronin S, Brunton SL, Kutz JN (2019). “Randomized Matrix Decompositions Using R.” _Journal of Statistical Software_, *89*(11), 1-48. doi: 10.18637/jss.v089.i11 (URL: https://doi.org/10.18637/jss.v089.i11).
+
+[5] Garrett Grolemund, Hadley Wickham (2011). Dates and Times Made Easy with lubridate. Journal of Statistical Software, 40(3), 1-25. URL https://www.jstatsoft.org/v40/i03/.
+
+[6] Grimmer, J. and Stewart, B.M., 2013. Text as data: The promise and pitfalls of automatic content analysis methods for political texts. Political analysis, 21(3), pp.267-297.
+
+[7] Grün B, Hornik K (2011). “topicmodels: An R Package for Fitting Topic Models.” _Journal of Statistical Software_, *40*(13), 1-30. doi: 10.18637/jss.v040.i13 (URL: https://doi.org/10.18637/jss.v040.i13).
+
+[8] Hadley Wickham (2019). stringr: Simple, Consistent Wrappers for Common String Operations. R package version 1.4.0. https://CRAN.R-project.org/package=stringr
+
+[9] Hadley Wickham, Romain François, Lionel Henry and Kirill Müller (2020). dplyr: A Grammar of Data Manipulation. R package version 1.0.2. https://CRAN.R- project.org/package=dplyr
+
+[10] Hlavac, Marek (2018). stargazer: Well-Formatted Regression and Summary Statistics Tables. R package version 5.2.1. https://CRAN.R-project.org/package=stargazer
+
+[11] Hadley Wickham (2011). The Split-Apply-Combine Strategy for Data Analysis. Journal of Statistical Software, 40(1), 1-29. URL http://www.jstatsoft.org/v40/i01/.
+
+[12] H. Wickham. ggplot2: Elegant Graphics for Data Analysis. Springer-Verlag New York, 2016.
+
+[13] Ian Fellows (2018). wordcloud: Word Clouds. R package version 2.6. https://CRAN.R- project.org/package=wordcloud
+
+[14] Ingo Feinerer and Kurt Hornik (2020). tm: Text Mining Package. R package version 0.7- 8. https://CRAN.R-project.org/package=tm
+
+[15] Ingo Feinerer, Kurt Hornik, and David Meyer (2008). Text Mining Infrastructure in R. Journal of Statistical Software 25(5): 1-54. URL: https://www.jstatsoft.org/v25/i05/.
+
+[16] Jan Wijffels (2020). udpipe: Tokenization, Parts of Speech Tagging, Lemmatization and Dependency Parsing with the 'UDPipe' 'NLP' Toolkit. R package version 0.8.5. https://CRAN.R- project.org/package=udpipe
+
+[17] Jeroen Ooms (2021). cld3: Google's Compact Language Detector 3. R package version 1.4.1. https://CRAN.R-project.org/package=cld3
+
+[18] Jesse H. Krijthe (2015). Rtsne: T-Distributed Stochastic Neighbor Embedding using a Barnes-Hut Implementation, URL: https://github.com/jkrijthe/Rtsne
+
+[19] Kai Habel, Raoul Grasman, Robert B. Gramacy, Pavlo Mozharovskyi and David C. Sterratt (2019). geometry: Mesh Generation and Surface Tessellation. R package version 0.4.5. https://CRAN.R-project.org/package=geometry
+
+[20] Kurt Hornik, David Meyer and Christian Buchta (2020). slam: Sparse Lightweight Arrays and Matrices. R package version 0.1-48. https://CRAN.R-project.org/package=slam
+
+[21] Matt Dowle and Arun Srinivasan (2020). data.table: Extension of `data.frame`. R package version 1.13.2. https://CRAN.R-project.org/package=data.table
+
+[22] Mishra, P., Pandey, C.M., Singh, U., Gupta, A., Sahu, C. and Keshri, A., 2019. Descriptive statistics and normality tests for statistical data. Annals of cardiac anaesthesia, 22(1), p.67.
+
+[23] Revelle, W. (2020) psych: Procedures for Personality and Psychological Research, Northwestern University, Evanston, Illinois, USA, https://CRAN.R-project.org/package=psych Version = 2.1.3,.
+
+[24] Rinker, T. W. (2018). lexicon: Lexicon Data version 1.2.1. http://github.com/trinker/lexicon
+
+[25] Rinker, T. W. (2020). qdap: Quantitative Discourse Analysis Package. 2.4.2. Buffalo, New York. https://github.com/trinker/qdap
+
+[26] Roberts ME, Stewart BM, Tingley D (2019). “stm: An R Package for Structural Topic Models.” _Journal of Statistical Software_, *91*(2), 1-40. doi: 10.18637/jss.v091.i02 (URL: https://doi.org/10.18637/jss.v091.i02).
+
+[27] R Core Team (2020). R: A language and environment for statistical computing. R Foundation for Statistical Computing, Vienna, Austria. URL https://www.R-project.org/.
+
+[28] Silge J, Robinson D (2016). “tidytext: Text Mining and Analysis Using Tidy Data Principles in R.” _JOSS_, *1*(3). doi:10.21105/joss.00037 (URL: https://doi.org/10.21105/joss.00037), <URL: http://dx.doi.org/10.21105/joss.00037>.
+52
+
+[28] State of Hawai'I portal (2020). Statewide Stay-at-Home Order: effective March 25, 2020 through April 30, 2020. https://hawaiicovid19.com/statewide-stay-at-home-order-effective- march-25-2020-through-april-30-2020/
+
+[29] Stefan Milton Bache and Hadley Wickham (2014). magrittr: A Forward-Pipe Operator for R. R package version 1.5. https://CRAN.R-project.org/package=magrittr
+
+[30] Thomas Lin Pedersen (2021). ggraph: An Implementation of Grammar of Graphics for Graphs and Networks. R package version 2.0.5. https://CRAN.R-project.org/package=ggraph
+
+[31] Thomas Lumley based on Fortran code by Alan Miller (2020). leaps:
+Regression Subset Selection. R package version 3.1. https://CRAN.R-project.org/package=leaps
+
+[32] Venables, W. N. & Ripley, B. D. (2002) Modern Applied Statistics with S. Fourth Edition. Springer, New York. ISBN 0-387-95457-0
+
+[33] Wickham et al., (2019). Welcome to the tidyverse. Journal of Open Source Software, 4(43), 1686, https://doi.org/10.21105/joss.01686
+
+
+
+
+
+
+
+
+
+
+
+
+
