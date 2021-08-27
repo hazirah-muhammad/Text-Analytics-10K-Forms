@@ -1,5 +1,5 @@
 ---
-title: "Assignment"
+title: "Text Analytics on 10K Forms"
 author: "Hazirah Muhammad"
 date: "6/23/2021"
 output:
@@ -25,8 +25,10 @@ library(lubridate)
 library(readr)
 library(data.table)
 library(textclean)
+
 # Download Forms 10-K from SEC
 library(edgar)
+
 # For sentiment datasets
 library(parallel)
 library(sentimentr)
@@ -45,6 +47,7 @@ library(SentimentAnalysis)
 library(BatchGetSymbols)
 library(koRpus)
 library(quantmod)
+
 # part C
 library(koRpus)
 library(stm)
@@ -1495,81 +1498,6 @@ topicCorr_review <- plot(stm::topicCorr(mda_stm_10),
                          verbose=TRUE, 
                          vlabels = topic_labels)
 ```
-#4. References
-
-[1] Csardi G, Nepusz T: The igraph software package for complex network research, InterJournal, Complex Systems 1695. 2006. https://igraph.org
-
-[2] David Robinson (2020). widyr: Widen, Process, then Re-Tidy
-Data. R package version 0.1.3. https://CRAN.R-project.org/package=widyr
-
-[3] Emil Hvitfeldt (2020). textdata: Download and Load Various Text Datasets. R package version 0.4.1. https://CRAN.R-project.org/package=textdata
-
-[4] Erichson NB, Voronin S, Brunton SL, Kutz JN (2019). “Randomized Matrix Decompositions Using R.” _Journal of Statistical Software_, *89*(11), 1-48. doi: 10.18637/jss.v089.i11 (URL: https://doi.org/10.18637/jss.v089.i11).
-
-[5] Garrett Grolemund, Hadley Wickham (2011). Dates and Times Made Easy with lubridate. Journal of Statistical Software, 40(3), 1-25. URL https://www.jstatsoft.org/v40/i03/.
-
-[6] Grimmer, J. and Stewart, B.M., 2013. Text as data: The promise and pitfalls of automatic content analysis methods for political texts. Political analysis, 21(3), pp.267-297.
-
-[7] Grün B, Hornik K (2011). “topicmodels: An R Package for Fitting Topic Models.” _Journal of Statistical Software_, *40*(13), 1-30. doi: 10.18637/jss.v040.i13 (URL: https://doi.org/10.18637/jss.v040.i13).
-
-[8] Hadley Wickham (2019). stringr: Simple, Consistent Wrappers for Common String Operations. R package version 1.4.0. https://CRAN.R-project.org/package=stringr
-
-[9] Hadley Wickham, Romain François, Lionel Henry and Kirill Müller (2020). dplyr: A Grammar of Data Manipulation. R package version 1.0.2. https://CRAN.R- project.org/package=dplyr
-
-[10] Hlavac, Marek (2018). stargazer: Well-Formatted Regression and Summary Statistics Tables. R package version 5.2.1. https://CRAN.R-project.org/package=stargazer
-
-[11] Hadley Wickham (2011). The Split-Apply-Combine Strategy for Data Analysis. Journal of Statistical Software, 40(1), 1-29. URL http://www.jstatsoft.org/v40/i01/.
-
-[12] H. Wickham. ggplot2: Elegant Graphics for Data Analysis. Springer-Verlag New York, 2016.
-
-[13] Ian Fellows (2018). wordcloud: Word Clouds. R package version 2.6. https://CRAN.R- project.org/package=wordcloud
-
-[14] Ingo Feinerer and Kurt Hornik (2020). tm: Text Mining Package. R package version 0.7- 8. https://CRAN.R-project.org/package=tm
-
-[15] Ingo Feinerer, Kurt Hornik, and David Meyer (2008). Text Mining Infrastructure in R. Journal of Statistical Software 25(5): 1-54. URL: https://www.jstatsoft.org/v25/i05/.
-
-[16] Jan Wijffels (2020). udpipe: Tokenization, Parts of Speech Tagging, Lemmatization and Dependency Parsing with the 'UDPipe' 'NLP' Toolkit. R package version 0.8.5. https://CRAN.R- project.org/package=udpipe
-
-[17] Jeroen Ooms (2021). cld3: Google's Compact Language Detector 3. R package version 1.4.1. https://CRAN.R-project.org/package=cld3
-
-[18] Jesse H. Krijthe (2015). Rtsne: T-Distributed Stochastic Neighbor Embedding using a Barnes-Hut Implementation, URL: https://github.com/jkrijthe/Rtsne
-
-[19] Kai Habel, Raoul Grasman, Robert B. Gramacy, Pavlo Mozharovskyi and David C. Sterratt (2019). geometry: Mesh Generation and Surface Tessellation. R package version 0.4.5. https://CRAN.R-project.org/package=geometry
-
-[20] Kurt Hornik, David Meyer and Christian Buchta (2020). slam: Sparse Lightweight Arrays and Matrices. R package version 0.1-48. https://CRAN.R-project.org/package=slam
-
-[21] Matt Dowle and Arun Srinivasan (2020). data.table: Extension of `data.frame`. R package version 1.13.2. https://CRAN.R-project.org/package=data.table
-
-[22] Mishra, P., Pandey, C.M., Singh, U., Gupta, A., Sahu, C. and Keshri, A., 2019. Descriptive statistics and normality tests for statistical data. Annals of cardiac anaesthesia, 22(1), p.67.
-
-[23] Revelle, W. (2020) psych: Procedures for Personality and Psychological Research, Northwestern University, Evanston, Illinois, USA, https://CRAN.R-project.org/package=psych Version = 2.1.3,.
-
-[24] Rinker, T. W. (2018). lexicon: Lexicon Data version 1.2.1. http://github.com/trinker/lexicon
-
-[25] Rinker, T. W. (2020). qdap: Quantitative Discourse Analysis Package. 2.4.2. Buffalo, New York. https://github.com/trinker/qdap
-
-[26] Roberts ME, Stewart BM, Tingley D (2019). “stm: An R Package for Structural Topic Models.” _Journal of Statistical Software_, *91*(2), 1-40. doi: 10.18637/jss.v091.i02 (URL: https://doi.org/10.18637/jss.v091.i02).
-
-[27] R Core Team (2020). R: A language and environment for statistical computing. R Foundation for Statistical Computing, Vienna, Austria. URL https://www.R-project.org/.
-
-[28] Silge J, Robinson D (2016). “tidytext: Text Mining and Analysis Using Tidy Data Principles in R.” _JOSS_, *1*(3). doi:10.21105/joss.00037 (URL: https://doi.org/10.21105/joss.00037), <URL: http://dx.doi.org/10.21105/joss.00037>.
-52
-
-[28] State of Hawai'I portal (2020). Statewide Stay-at-Home Order: effective March 25, 2020 through April 30, 2020. https://hawaiicovid19.com/statewide-stay-at-home-order-effective- march-25-2020-through-april-30-2020/
-
-[29] Stefan Milton Bache and Hadley Wickham (2014). magrittr: A Forward-Pipe Operator for R. R package version 1.5. https://CRAN.R-project.org/package=magrittr
-
-[30] Thomas Lin Pedersen (2021). ggraph: An Implementation of Grammar of Graphics for Graphs and Networks. R package version 2.0.5. https://CRAN.R-project.org/package=ggraph
-
-[31] Thomas Lumley based on Fortran code by Alan Miller (2020). leaps:
-Regression Subset Selection. R package version 3.1. https://CRAN.R-project.org/package=leaps
-
-[32] Venables, W. N. & Ripley, B. D. (2002) Modern Applied Statistics with S. Fourth Edition. Springer, New York. ISBN 0-387-95457-0
-
-[33] Wickham et al., (2019). Welcome to the tidyverse. Journal of Open Source Software, 4(43), 1686, https://doi.org/10.21105/joss.01686
-
-
-
 
 
 
