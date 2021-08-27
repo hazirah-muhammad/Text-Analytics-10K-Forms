@@ -898,7 +898,6 @@ ggarrange(return_avg_plot, price_adj_plot, ncol = 1, nrow = 2)
 ```
 
 
-
 ```{r}
 # Combine Return Adjusted Price and Price Adjusted Ratio data
 v <- price_adj_ratio_merge %>% 
@@ -935,53 +934,9 @@ reg_final <- stargazer::stargazer(reg_LM, reg_bing, reg_afinn, reg_nrc, type='te
 
 ```
 
-## 2.6 Model Sentiment by GICS Sub Industry
-
-```{r eval=FALSE}
-# Model sentiment for every sub industry
-model_output_sub_industry <- data.frame()
-
-sector <- price_adj_ratio_merge %>% select(GICS_Sub_Industry)
-
-for (z in 1:length(sector)) {
-  model_data <- sentiment_data %>%
-  # filter(GICS_Sub_Industry==sector[z]) %>%
-    select(-c(Year, CIK, Company_Name,Symbol, Security, Date_Filed, Quarter))
-  
-# Modelling
-  model <- lm(price_adj_ratio ~., data = model_data)
-  
-# Prep data for plotting
-  local_df <- head(as.data.frame(summary(model)$coefficients) %>%
-                     tibble::rownames_to_column() %>%
-                     #mutate(absolute_t_value = abs('t value')) %>%
-                     #arrange(desc(absolute_t_value)), 10) %>%
-                     mutate(rowname = factor(rowname, levels = rowname)) %>%
-    mutate(significance = case_when('Pr(>|t|)' <= 0.001 ~ 'significant***', 
-                                    'Pr(>|t|)' <= 0.01 ~ 'significant**', 
-                                    'Pr(>|t|)' <= 0.05 ~ 'significant*', 
-                                    TRUE ~ 'not significant')) %>%
-    mutate(GICS_Sub_Industry = sub_industry[z]) %>%
-    mutate(r_squared = paste('Multiple R-Squared:', as.character(round(summary(model)$r.squared,3))))
-  
-  model_output_sub_industry<- rbind(model_output_sub_industry, local_df)
-  
-}
-
-ggplot(model_output_sub_industry, 
-       aes(x = reorder(rowname, absolute_t_value), 
-           y = absolute_t_value, fill = significance)) +
-  geom_bar(stat = "identity") +
-  labs(title = "Top 10 Sentiment Features for Predicting Stock Price Change After 10-K Filings", 
-       subtitle = "Grouping on GICS Sub Industry", y= "Absolute t-value", x="Features") + 
-  ylim(0,4) + coord_flip() +
-  facet_wrap(~GICS_Sub_Industry+r_squared, ncol = 4, scales = "free")
-
-rm(model_output_sub_industry)
-```
 
 
-## 2.7 Additional Analysis on Classification By Emotion
+## 2.6 Additional Analysis on Classification By Emotion
 
 ```{r}
 # NRC Dictionary
